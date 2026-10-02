@@ -1,0 +1,12 @@
+# Локальные секреты: скопируйте в terraform.tfvars (он в .gitignore).
+# Остальные параметры стенда — в homelab.auto.tfvars.
+# В CI эти значения приходят из CI/CD Variables через TF_VAR_* (см. IaC/ci/hidden/terraform/terraform-prepare.yml).
+
+# Формат: <user>@<realm>!<token-name>=<token-value>
+proxmox_token = "__PROXMOX_TOKEN__"
+
+# Пароль root — нужен провайдеру bpg/proxmox для SSH при операциях с дисками
+proxmox_ssh_password = "__PROXMOX_SSH_PASSWORD__"
+
+vm_ssh_public_key = "__VM_SSH_PUBLIC_KEY__"
+user_password     = "__USER_PASSWORD__"
