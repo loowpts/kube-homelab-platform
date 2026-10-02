@@ -1,0 +1,42 @@
+# Приложение todo в двух окружениях из одного чарта charts/todo:
+#   todo-dev  — values-dev.yaml  (CI обновляет тег при каждом merge в main)
+#   todo-prod — values-prod.yaml (CI обновляет тег по git-тегу vX.Y.Z после подтверждения)
+# Новое окружение (stage) = ещё один элемент списка + values-stage.yaml.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: todo
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - list:
+        elements:
+          - env: dev
+          - env: prod
+  template:
+    metadata:
+      name: "todo-{{ .env }}"
+    spec:
+      project: default
+      source:
+        repoURL: http://192.168.0.21/loowpts/homelab.git
+        targetRevision: main
+        path: charts/todo
+        helm:
+          releaseName: todo
+          valueFiles:
+            - values.yaml
+            - "values-{{ .env }}.yaml"
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: "todo-{{ .env }}"
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
