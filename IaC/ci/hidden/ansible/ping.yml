@@ -1,0 +1,10 @@
+# --- PREFLIGHT: ждём, пока все хосты (включая LB) станут доступны по SSH ---
+.ansible_ping:
+  stage: preflight
+  extends: .ansible_base
+  script:
+    - cd "${ANSIBLE_DIR}"
+    # Только VM кластера и LB: Proxmox (группа proxmox) из CI недоступен
+    - ansible 'k8s_cluster:lb' -m ansible.builtin.wait_for_connection -a "timeout=300"
+  rules:
+    - !reference [.ansible_rules, rules]

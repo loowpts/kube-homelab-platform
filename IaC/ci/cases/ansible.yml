@@ -1,0 +1,40 @@
+# Дочерний пайплайн Ansible / kubespray (запускается из корневого .gitlab-ci.yml)
+stages:
+  - lint
+  - preflight
+  - provision
+  - bootstrap
+
+include:
+  - local: 'IaC/ci/hidden/ansible/ansible-base.yml'
+  - local: 'IaC/ci/hidden/ansible/ping.yml'
+  - local: 'IaC/ci/hidden/ansible/ansible-provision.yml'
+  - local: 'IaC/ci/hidden/ansible/kubespray.yml'
+
+variables:
+  # kubespray подключён как git submodule (IaC/kubespray)
+  GIT_SUBMODULE_STRATEGY: normal
+  ANSIBLE_HOST_KEY_CHECKING: "false"
+  ANSIBLE_DIR: ${CI_PROJECT_DIR}/IaC/ansible
+  KUBESPRAY_DIR: ${CI_PROJECT_DIR}/IaC/kubespray
+  KUBESPRAY_INVENTORY: ${CI_PROJECT_DIR}/IaC/inventory/mycluster/inventory.ini
+
+# Проверка синтаксиса на любой ветке (без неё на фиче-ветке пайплайн был бы пустым)
+ansible_syntax:
+  extends: .ansible_base
+  stage: lint
+  script:
+    - cd "${ANSIBLE_DIR}"
+    - ansible-playbook --syntax-check playbooks/site.yml
+
+ansible_ping:
+  extends: .ansible_ping
+
+ansible_provision:
+  extends: .ansible_provision
+
+kubespray:
+  extends: .kubespray
+
+platform:
+  extends: .platform

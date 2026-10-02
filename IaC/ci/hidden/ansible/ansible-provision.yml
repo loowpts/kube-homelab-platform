@@ -1,0 +1,8 @@
+.ansible_provision:
+  stage: provision
+  extends: .ansible_base
+  script:
+    - cd "${ANSIBLE_DIR}"
+    - ansible-playbook playbooks/site.yml
+  rules:
+    - !reference [.ansible_rules, rules]

@@ -1,0 +1,16 @@
+# --- 2. СТАДИЯ VALIDATE: validate + plan, план сохраняется артефактом ---
+.terraform_plan:
+  stage: validate
+  extends: .terraform_prepare
+  script:
+    - !reference [.terraform_prepare, script]
+    - terraform -chdir=${TF_ROOT} validate
+    # Пустой state = Terraform создаст все VM заново. Почти всегда это ошибка адреса state
+    # или токена, а не намерение. Для подъёма стенда с нуля: Run pipeline с TF_ALLOW_EMPTY_STATE=true.
+    - 'if [ -z "$(terraform -chdir=${TF_ROOT} state list)" ] && [ "${TF_ALLOW_EMPTY_STATE}" != "true" ]; then echo "ERROR: state пустой — проверьте адрес state (Operate -> Terraform states)"; exit 1; fi'
+    - terraform -chdir=${TF_ROOT} plan -input=false -out=tfplan
+  artifacts:
+    # В плане есть значения переменных (в т.ч. секретов) — храним недолго
+    paths:
+      - IaC/terraform/tfplan
+    expire_in: 1 day

@@ -1,0 +1,18 @@
+.ansible_base:
+  image:
+    # У образа нет тегов с версией ansible-core — закреплён по digest (ansible-core 2.21.4)
+    name: cytopia/ansible:latest@sha256:39eb726f741e5d2e0ffe8f523ae0ac81532f4c0fced4fb3eb25590130da766d3
+    entrypoint: [""]
+  before_script:
+    - apk add --no-cache openssh-client
+    - mkdir -p ~/.ssh
+    - echo "$SSH_KEY" | tr -d '\r' > ~/.ssh/id_ed25519
+    - chmod 600 ~/.ssh/id_ed25519
+    - export ANSIBLE_CONFIG="${ANSIBLE_DIR}/ansible.cfg"
+    # ansible.cfg игнорируется в world-writable каталоге
+    - chmod o-w "${ANSIBLE_DIR}"
+
+# Ansible меняет реальные хосты — только из main
+.ansible_rules:
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'

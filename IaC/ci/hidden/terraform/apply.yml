@@ -1,0 +1,12 @@
+# --- 3. СТАДИЯ INFRA: применяется ровно тот план, что был показан в terraform_plan ---
+.terraform_apply:
+  stage: infra
+  extends: .terraform_prepare
+  needs:
+    - terraform_plan
+  script:
+    - !reference [.terraform_prepare, script]
+    - terraform -chdir=${TF_ROOT} apply -input=false -parallelism=2 tfplan
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: manual

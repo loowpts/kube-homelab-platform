@@ -1,0 +1,35 @@
+# --- BOOTSTRAP: развёртывание кластера (kubespray — git submodule, inventory — IaC/inventory) ---
+.kubespray:
+  stage: bootstrap
+  extends: .ansible_base
+  script:
+    - apk add --no-cache python3 py3-pip gcc python3-dev musl-dev linux-headers
+    - cd "${KUBESPRAY_DIR}"
+    - chmod o-w .
+
+    # Версию Ansible задаёт requirements.txt kubespray — ставим её в venv
+    - python3 -m venv venv
+    - source venv/bin/activate
+    - pip install --no-cache-dir --upgrade pip
+    - pip install --no-cache-dir -r requirements.txt
+
+    # ansible.cfg kubespray (а не IaC/ansible) — у него свои настройки.
+    # Пользователь и become — в [all:vars] inventory kubespray
+    - export ANSIBLE_CONFIG="${KUBESPRAY_DIR}/ansible.cfg"
+    - ansible-playbook -i "${KUBESPRAY_INVENTORY}" cluster.yml
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: manual
+
+# --- BOOTSTRAP: платформенные компоненты поверх кластера ---
+.platform:
+  stage: bootstrap
+  extends: .ansible_base
+  needs:
+    - kubespray
+  script:
+    - cd "${ANSIBLE_DIR}"
+    - ansible-playbook playbooks/platform.yml
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: manual

@@ -1,0 +1,33 @@
+# Дочерний пайплайн Terraform (запускается из корневого .gitlab-ci.yml)
+stages:
+  - lint
+  - validate
+  - infra
+
+include:
+  - local: 'IaC/ci/hidden/terraform/lint-format.yml'
+  - local: 'IaC/ci/hidden/terraform/tflint.yml'
+  - local: 'IaC/ci/hidden/terraform/terraform-prepare.yml'
+  - local: 'IaC/ci/hidden/terraform/terraform-plan.yml'
+  - local: 'IaC/ci/hidden/terraform/apply.yml'
+  - local: 'IaC/ci/hidden/terraform/destroy.yml'
+
+variables:
+  TF_ROOT: ${CI_PROJECT_DIR}/IaC/terraform
+  TF_STATE_NAME: "default"
+  GITLAB_API_URL: "http://192.168.0.21/api/v4"
+
+lint_format:
+  extends: .lint_format
+
+tflint:
+  extends: .tflint
+
+terraform_plan:
+  extends: .terraform_plan
+
+terraform_apply:
+  extends: .terraform_apply
+
+terraform_destroy:
+  extends: .terraform_destroy

@@ -1,0 +1,8 @@
+# --- 1. СТАДИЯ LINT (Запускается везде для проверки кода) ---
+.lint_format:
+  stage: lint
+  image:
+    name: hashicorp/terraform:1.16.4
+    entrypoint: [""]
+  script:
+    - terraform -chdir=${TF_ROOT} fmt -check -recursive

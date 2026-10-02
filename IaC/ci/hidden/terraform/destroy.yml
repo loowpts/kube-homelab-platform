@@ -1,0 +1,12 @@
+.terraform_destroy:
+  stage: infra
+  extends: .terraform_prepare
+  # Ручная кнопка не должна блокировать пайплайн (без allow_failure ручная
+  # джоба в rules делает пайплайн "blocked" до нажатия)
+  allow_failure: true
+  script:
+    - !reference [.terraform_prepare, script]
+    - terraform -chdir=${TF_ROOT} destroy -auto-approve -parallelism=2
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: manual

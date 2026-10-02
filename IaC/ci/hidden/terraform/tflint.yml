@@ -1,0 +1,7 @@
+.tflint:
+  stage: lint
+  image:
+    name: ghcr.io/terraform-linters/tflint:v0.64.0
+    entrypoint: [""]
+  script:
+    - tflint --chdir=${TF_ROOT}
