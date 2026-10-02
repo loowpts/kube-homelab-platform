@@ -1,0 +1,59 @@
+# Строка подключения к локальному Postgres — общая для migrate и app
+x-postgres-dsn: &postgres-dsn "postgres://todoapp:todoapp@postgres:5432/todoapp?sslmode=disable"
+
+services:
+  # Применяет миграции и завершается; app стартует только после успешного выполнения
+  migrate:
+    build: .
+    command: ["-migrate-only"]
+    environment:
+      POSTGRES_DSN: *postgres-dsn
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    environment:
+      HTTP_PORT: "8080"
+      POSTGRES_DSN: *postgres-dsn
+      REDIS_ADDR: "redis:6379"
+      CACHE_TTL_SECONDS: "10"
+      RATE_LIMIT_RPM: "120"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: todoapp
+      POSTGRES_PASSWORD: todoapp
+      POSTGRES_DB: todoapp
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U todoapp -d todoapp"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres-data:

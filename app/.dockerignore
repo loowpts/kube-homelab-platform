@@ -1,0 +1,9 @@
+# В образ нужны только исходники Go, миграции и web/
+.DS_Store
+.env
+.env.*
+*.md
+docker-compose.yml
+Dockerfile
+.dockerignore
+ci/
