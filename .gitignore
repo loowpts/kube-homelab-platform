@@ -1,0 +1,16 @@
+.DS_Store
+
+# kubespray: сгенерированные креды и артефакты инвентаря
+IaC/inventory/*/credentials/
+IaC/inventory/*/artifacts/
+
+# сертификаты, выгруженные локально (корень CA для импорта в браузер)
+*.crt
+
+# Terraform: state, локальные секреты и зеркало провайдеров
+*.tfstate
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+terraform.tfvars
+IaC/terraform/providers/
