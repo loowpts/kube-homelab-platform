@@ -1,0 +1,80 @@
+{{- if .Values.monitoring.serviceMonitor }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: backend
+  labels:
+    {{- include "todo.labels" . | nindent 4 }}
+    release: {{ .Values.monitoring.releaseLabel }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "todo.selector" (dict "ctx" . "component" "backend") | nindent 6 }}
+  endpoints:
+    # Отдельный порт метрик, не публикуется через Ingress
+    - port: metrics
+      path: /metrics
+      interval: 15s
+{{- end }}
+{{- if .Values.monitoring.alerts }}
+---
+# Алерты приложения. Поды, рестарты, PVC и TargetDown покрыты правилами kube-prometheus-stack.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: backend
+  labels:
+    {{- include "todo.labels" . | nindent 4 }}
+    release: {{ .Values.monitoring.releaseLabel }}
+spec:
+  groups:
+    - name: backend-{{ .Release.Namespace }}
+      rules:
+        - alert: BackendDown
+          expr: |
+            sum(up{namespace="{{ .Release.Namespace }}", job="backend"}) == 0
+            or absent(up{namespace="{{ .Release.Namespace }}", job="backend"})
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Backend ({{ .Release.Namespace }}) недоступен"
+            description: "Prometheus не может собрать метрики ни с одного пода backend 2 минуты."
+        - alert: BackendHighErrorRate
+          expr: |
+            sum(rate(http_requests_total{namespace="{{ .Release.Namespace }}", job="backend", code=~"5.."}[5m]))
+              /
+            sum(rate(http_requests_total{namespace="{{ .Release.Namespace }}", job="backend"}[5m]))
+              > 0.05
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: {{`"Backend отвечает 5xx на {{ $value | humanizePercentage }} запросов"`}}
+            description: "Больше 5% ответов — ошибки сервера. Детали — в логах подов."
+        - alert: BackendHighLatency
+          expr: |
+            histogram_quantile(0.95,
+              sum by (le) (rate(http_request_duration_seconds_bucket{namespace="{{ .Release.Namespace }}", job="backend", route!~"/healthz|/readyz"}[5m]))
+            ) > 1
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: {{`"p95 времени ответа backend {{ $value | humanizeDuration }}"`}}
+            description: "95% запросов медленнее 1 секунды на протяжении 10 минут."
+        {{- if .Values.backup.enabled }}
+        - alert: PostgresBackupStale
+          # kube-state-metrics: время последнего успешного Job CronJob'а. Нет метрики —
+          # бэкап ни разу не прошёл.
+          expr: |
+            time() - kube_cronjob_status_last_successful_time{namespace="{{ .Release.Namespace }}", cronjob="postgres-backup"} > 26 * 3600
+            or absent(kube_cronjob_status_last_successful_time{namespace="{{ .Release.Namespace }}", cronjob="postgres-backup"})
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "pg_dump ({{ .Release.Namespace }}) не проходил больше 26 часов"
+            description: "CronJob postgres-backup давно не завершался успешно. Логи: kubectl -n {{ .Release.Namespace }} logs job/<последний>."
+        {{- end }}
+{{- end }}
