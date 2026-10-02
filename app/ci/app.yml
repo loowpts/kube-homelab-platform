@@ -1,0 +1,147 @@
+# Дочерний пайплайн приложения (запускается из корневого .gitlab-ci.yml).
+#
+#   ветка        : lint -> test (unit + integration) -> build (образ :<sha>) -> scan (trivy)
+#   main         : ... -> app_deploy_dev   (авто)   — тег <sha> в charts/todo/values-dev.yaml
+#   тег vX.Y.Z   : ... -> app_deploy_prod  (кнопка) — тег vX.Y.Z в charts/todo/values-prod.yaml
+#
+# Деплой — GitOps: джоба коммитит тег в values-<env>.yaml, ArgoCD (ApplicationSet todo)
+# видит коммит в main и выкатывает. Образ собирается один раз и продвигается dev -> prod.
+
+stages:
+  - lint
+  - test
+  - build
+  - scan
+  - deploy
+
+.app_base:
+  image: golang:1.25
+
+app_lint:
+  extends: .app_base
+  stage: lint
+  script:
+    - cd app
+    - 'test -z "$(gofmt -l .)" || { gofmt -l .; echo "ERROR: файлы не отформатированы (gofmt -w .)"; exit 1; }'
+    - go vet ./...
+
+app_test:
+  extends: .app_base
+  stage: test
+  script:
+    - cd app
+    - go test -race -count=1 ./...
+
+# Интеграционные тесты против настоящих Postgres и Redis (services джобы).
+# Тест создаёт и удаляет свою БД и сам ждёт готовности сервисов.
+app_integration_test:
+  extends: .app_base
+  stage: test
+  services:
+    - name: postgres:16-alpine
+      alias: postgres
+    - name: redis:7-alpine
+      alias: redis
+  variables:
+    # Одноразовая БД только для джобы, не секрет
+    POSTGRES_USER: itest
+    POSTGRES_PASSWORD: itest
+    POSTGRES_DB: itest
+    TEST_POSTGRES_DSN: postgres://itest:itest@postgres:5432/itest?sslmode=disable
+    TEST_REDIS_ADDR: redis:6379
+  script:
+    - cd app
+    - go test -tags integration -race -count=1 -v ./internal/integration/
+
+app_build:
+  stage: build
+  image:
+    # kaniko собирает образ без docker-демона и привилегий
+    name: gcr.io/kaniko-project/executor:v1.23.2-debug
+    entrypoint: [""]
+  script:
+    - mkdir -p /kaniko/.docker
+    - 'echo "{\"auths\":{\"${CI_REGISTRY}\":{\"username\":\"${CI_REGISTRY_USER}\",\"password\":\"${CI_REGISTRY_PASSWORD}\"}}}" > /kaniko/.docker/config.json'
+    # Всегда :<sha>; для релиза ещё и :vX.Y.Z — тот же образ под читаемым именем
+    - 'DEST="--destination ${CI_REGISTRY_IMAGE}/backend:${CI_COMMIT_SHORT_SHA}"'
+    - 'if [ -n "${CI_COMMIT_TAG}" ]; then DEST="${DEST} --destination ${CI_REGISTRY_IMAGE}/backend:${CI_COMMIT_TAG}"; fi'
+    # Registry по http — отсюда --insecure
+    # --tar-path: тот же образ ещё и файлом — его сканирует app_scan (trivy не ходит
+    # в registry на приватном адресе: защита от SSRF)
+    - /kaniko/executor --context "${CI_PROJECT_DIR}/app" --dockerfile "${CI_PROJECT_DIR}/app/Dockerfile" ${DEST} --tar-path image.tar --insecure --skip-tls-verify
+  artifacts:
+    paths:
+      - image.tar
+    expire_in: 1 day
+
+# Сканирование собранного образа (ОС-пакеты и Go-зависимости). Падает на HIGH/CRITICAL,
+# для которых есть исправление, — тогда деплой не идёт. Без исправления — только в отчёт.
+app_scan:
+  stage: scan
+  needs:
+    - app_build
+  image:
+    name: ghcr.io/aquasecurity/trivy:0.75.0
+    entrypoint: [""]
+  variables:
+    TRIVY_CACHE_DIR: ${CI_PROJECT_DIR}/.trivycache
+  cache:
+    key: trivy-db
+    paths:
+      - .trivycache/
+  script:
+    # Полный отчёт (включая уязвимости без исправления) — для истории, не блокирует
+    - trivy image --scanners vuln --severity HIGH,CRITICAL --format table --output trivy-report.txt --input image.tar
+    # Блокирует деплой: HIGH/CRITICAL, для которых есть исправление
+    - trivy image --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --input image.tar
+  artifacts:
+    when: always
+    paths:
+      - trivy-report.txt
+    expire_in: 30 days
+
+# Записать тег образа в values-<ENV>.yaml и закоммитить в main.
+# Берётся актуальный main (а не коммит пайплайна): он мог уйти вперёд, а в пайплайне
+# по тегу HEAD — вообще коммит тега.
+.deploy_values:
+  extends: .app_base
+  stage: deploy
+  # Деплой только образа, прошедшего сканирование
+  needs:
+    - app_scan
+  script:
+    - '[ -n "${APP_DEPLOY_TOKEN}" ] || { echo "ERROR: токен не передан"; exit 1; }'
+    - git config user.name "gitlab-ci"
+    - git config user.email "gitlab-ci@${CI_SERVER_HOST}"
+    - git fetch --depth=1 origin main
+    - git checkout -B main FETCH_HEAD
+    - 'sed -i "s/^  tag: .*/  tag: ${NEW_TAG}/" "charts/todo/values-${ENV}.yaml"'
+    - 'if git diff --quiet; then echo "${ENV}: тег уже ${NEW_TAG}"; exit 0; fi'
+    - git diff
+    - 'git commit -am "deploy(${ENV}): todo ${NEW_TAG}"'
+    # -o ci.skip: пайплайн не запускается для этого push. Не [skip ci] в сообщении:
+    # он навсегда помечает коммит, и тег vX.Y.Z на нём (а это последний коммит
+    # main после каждого merge) тоже не получил бы пайплайн.
+    - 'git push -o ci.skip "${CI_SERVER_PROTOCOL}://oauth2:${APP_DEPLOY_TOKEN}@${CI_SERVER_HOST}:${CI_SERVER_PORT}/${CI_PROJECT_PATH}.git" main'
+
+app_deploy_dev:
+  extends: .deploy_values
+  variables:
+    ENV: dev
+    NEW_TAG: ${CI_COMMIT_SHORT_SHA}
+  environment:
+    name: dev
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
+app_deploy_prod:
+  extends: .deploy_values
+  variables:
+    ENV: prod
+    NEW_TAG: ${CI_COMMIT_TAG}
+  environment:
+    name: production
+  rules:
+    # Только семантические теги; выкатывает человек кнопкой
+    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/'
+      when: manual

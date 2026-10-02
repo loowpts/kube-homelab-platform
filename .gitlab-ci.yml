@@ -1,0 +1,81 @@
+# Корневой пайплайн сам ничего не делает: по изменённым путям он запускает
+# независимые дочерние пайплайны. У каждого свои стадии, переменные и ручные джобы,
+# поэтому инфраструктура и приложение не пересекаются.
+#
+# Build -> Pipelines -> Run pipeline (вручную) создаёт все дочерние — так доступны
+# ручные джобы (kubespray, platform, terraform_destroy) без правки файлов.
+workflow:
+  rules:
+    # Один пайплайн на push — пайплайн ветки (его статус показывает и MR).
+    # Отдельные MR-пайплайны не создаются: дочерние пайплайны в них были бы пустыми.
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: never
+    - when: always
+
+stages:
+  - pipelines
+
+terraform:
+  stage: pipelines
+  trigger:
+    include: IaC/ci/cases/terraform.yml
+    strategy: depend
+  rules:
+    # Тег = релиз приложения; инфраструктуру он не трогает
+    - if: '$CI_COMMIT_TAG'
+      when: never
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+    - changes:
+        - IaC/terraform/**/*
+        - IaC/ci/cases/terraform.yml
+        - IaC/ci/hidden/terraform/**/*
+
+ansible:
+  stage: pipelines
+  trigger:
+    include: IaC/ci/cases/ansible.yml
+    strategy: depend
+  rules:
+    # Тег = релиз приложения; инфраструктуру он не трогает
+    - if: '$CI_COMMIT_TAG'
+      when: never
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+    - changes:
+        - IaC/ansible/**/*
+        - IaC/inventory/**/*
+        - IaC/kubespray
+        - IaC/ci/cases/ansible.yml
+        - IaC/ci/hidden/ansible/**/*
+
+app:
+  stage: pipelines
+  trigger:
+    include: app/ci/app.yml
+    strategy: depend
+  rules:
+    # Тег vX.Y.Z — релиз в prod (app_deploy_prod)
+    - if: '$CI_COMMIT_TAG'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+    # Только то, что влияет на образ или на сам пайплайн: правка README/compose
+    # не должна пересобирать образ и перевыкатывать dev
+    - changes:
+        - app/**/*.go
+        - app/go.mod
+        - app/go.sum
+        - app/Dockerfile
+        - app/.dockerignore
+        - app/migrations/**/*
+        - app/web/**/*
+        - app/ci/**/*
+
+chart:
+  stage: pipelines
+  trigger:
+    include: charts/ci.yml
+    strategy: depend
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: never
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+    - changes:
+        - charts/**/*

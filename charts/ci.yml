@@ -1,0 +1,19 @@
+# Дочерний пайплайн чартов (запускается из корневого .gitlab-ci.yml при изменениях в charts/).
+# Та же версия Helm, что у ArgoCD (repo-server) — проверка совпадает с тем, что он отрендерит.
+stages:
+  - lint
+
+chart_lint:
+  stage: lint
+  image:
+    name: alpine/helm:4.2.1
+    entrypoint: [""]
+  script:
+    - cd charts/todo
+    - |
+      for env in dev prod; do
+        echo "== ${env}"
+        helm lint . -f values.yaml -f "values-${env}.yaml"
+        helm template todo . -n "todo-${env}" -f values.yaml -f "values-${env}.yaml" > "/tmp/todo-${env}.yaml"
+        echo "отрендерено объектов: $(grep -c '^kind:' /tmp/todo-${env}.yaml)"
+      done
