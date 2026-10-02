@@ -1,0 +1,31 @@
+---
+
+- name: Базовая настройка всех VM
+  # Только VM стенда: хост Proxmox (группа proxmox) этот плейбук не трогает
+  hosts: k8s_cluster:lb
+  become: true
+
+  tasks:
+    - name: Обновить кэш пакетов
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Установить базовые пакеты
+      apt:
+        name: "{{ base_packages }}"
+        state: present
+        lock_timeout: 300
+        
+    - name: Установить временную зону
+      timezone:
+        name: "{{ timezone }}"
+
+    # Выключено по умолчанию: на нодах кластера обновление containerd/kubelet/ядра
+    # на всех хостах сразу роняет кластер. Запускать осознанно и по одной ноде:
+    #   ansible-playbook playbooks/base.yml -e apt_upgrade=true --limit <host>
+    - name: Обновить все пакеты
+      apt:
+        upgrade: dist
+        autoremove: yes
+      when: apt_upgrade | default(false) | bool

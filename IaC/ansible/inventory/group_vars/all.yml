@@ -1,0 +1,25 @@
+---
+base_packages:
+  - curl
+  - wget
+  - git
+  - vim
+  - htop
+  - net-tools
+  - unzip
+  - ca-certificates
+  - gnupg
+  - lsb-release
+  - software-properties-common
+  - jq
+  - python3-pip
+
+# ── Система ───────────────────────────────────────────────────────────────────
+timezone: Europe/Moscow
+
+# ── Сеть ──────────────────────────────────────────────────────────────────────
+# VIP, который делят lb1 и lb2 (keepalived): свободный адрес в подсети VM.
+# Здесь, а не в group_vars/lb.yml: нужен и плейбуку platform.yml (имена в ingress).
+virtual_ip: "192.168.0.15"
+# Домен имён сервисов: <сервис>.<VIP>.nip.io — публичный nip.io резолвит их в VIP.
+ingress_domain: "{{ virtual_ip }}.nip.io"
