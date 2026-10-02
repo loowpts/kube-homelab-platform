@@ -1,0 +1,5 @@
+---
+
+- import_playbook: base.yml
+- import_playbook: node.yml
+- import_playbook: loadbalancer.yml

@@ -1,0 +1,31 @@
+---
+# Переменные балансировщиков (playbooks/loadbalancer.yml)
+# VIP (virtual_ip) — в group_vars/all.yml: на него завязаны и имена сервисов в ingress.
+
+# Сетевой интерфейс VM, на котором поднимается VIP.
+nic_name: "eth0"
+
+# Пароль VRRP между lb1 и lb2 — секрет, в репозитории не хранится.
+# CI: CI/CD-переменная KEEPALIVED_AUTH_PASS (masked); локально: export KEEPALIVED_AUTH_PASS=...
+# Учитываются только первые 8 символов (ограничение VRRP PASS).
+keepalived_auth_pass: "{{ lookup('ansible.builtin.env', 'KEEPALIVED_AUTH_PASS') }}"
+
+# Сервисы кластера, опубликованные на VIP: <VIP>:port -> <master>:node_port.
+# Добавлять новые только сюда: haproxy.cfg целиком генерируется этим плейбуком,
+# ручные правки на LB будут перезаписаны при следующем прогоне.
+# node_port должен быть зафиксирован в values сервиса, иначе при пересоздании
+# Service порт сменится и запись перестанет работать.
+lb_services:
+  # ingress-nginx (IaC/argocd/apps/ingress-nginx.yaml): все сервисы по имени хоста
+  # <сервис>.192.168.0.15.nip.io. TLS завершает ingress — HAProxy пропускает как есть (tcp).
+  # Запрос по IP без имени (http://<VIP>) уходит в todo-prod (ingress.defaultRule).
+  - { name: ingress-http,  port: 80,   node_port: 31082, mode: tcp }
+  - { name: ingress-https, port: 443,  node_port: 30214, mode: tcp }
+  # Прямой доступ по портам — в обход ingress
+  - { name: grafana,    port: 3000, node_port: 31133, mode: http }
+  - { name: vault,      port: 8200, node_port: 30366, mode: http }
+  - { name: prometheus, port: 9090, node_port: 30230, mode: http }
+  # ArgoCD отдаёт свой TLS — пропускаем как есть (tcp)
+  - { name: argocd,     port: 8443, node_port: 30443, mode: tcp }
+  # todo-dev (charts/todo, values-dev.yaml: backend.nodePort)
+  - { name: todo-dev,   port: 8081, node_port: 30801, mode: http }

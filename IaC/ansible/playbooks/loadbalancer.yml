@@ -1,0 +1,138 @@
+- name: Configure Load Balancers (HAProxy + Keepalived)
+  hosts: lb
+  become: true
+  tasks:
+    - name: Keepalived password is set
+      ansible.builtin.assert:
+        that: keepalived_auth_pass | length > 0
+        fail_msg: "Задайте KEEPALIVED_AUTH_PASS (CI/CD Variables или env) — пароль VRRP между lb1 и lb2"
+        quiet: true
+
+    - name: Install HAProxy and Keepalived
+      apt:
+        name:
+          - haproxy
+          - keepalived
+          - psmisc   # killall для check_haproxy в keepalived
+        update_cache: yes
+        state: present
+        lock_timeout: 300
+
+    # HAProxy слушает VIP, которого на BACKUP-ноде нет. Без этого HAProxy на ней
+    # не стартует, keepalived понижает приоритет — и VIP не возвращается (так lb1
+    # и застрял после перезагрузки).
+    - name: Allow binding to VIP that is not on this node
+      sysctl:
+        name: net.ipv4.ip_nonlocal_bind
+        value: "1"
+        sysctl_file: /etc/sysctl.d/99-haproxy-vip.conf
+        reload: yes
+
+    - name: Configure HAProxy (Kubernetes API + сервисы на VIP)
+      copy:
+        dest: /etc/haproxy/haproxy.cfg
+        content: |
+          # Управляется Ansible (IaC/ansible/playbooks/loadbalancer.yml) — не редактировать вручную
+          global
+              log /dev/log local0
+              log /dev/log local1 notice
+              chroot /var/lib/haproxy
+              user haproxy
+              group haproxy
+              daemon
+
+          defaults
+              log     global
+              mode    tcp
+              option  tcplog
+              option  dontlognull
+              retries 3
+              timeout connect 5s
+              timeout client  50s
+              timeout server  50s
+
+          # API: долгие соединения (kubectl logs -f, watch, exec) — таймаут простоя 1 час,
+          # а не 50 с из defaults, иначе они обрываются через минуту тишины
+          frontend k8s-api-frontend
+              bind *:6443
+              mode tcp
+              option tcplog
+              timeout client 1h
+              default_backend k8s-api-backend
+
+          backend k8s-api-backend
+              mode tcp
+              balance roundrobin
+              option tcp-check
+              timeout server 1h
+          {% for host in groups['kube_control_plane'] %}
+              server {{ host }} {{ hostvars[host].ansible_host }}:6443 check
+          {% endfor %}
+          {% for svc in lb_services %}
+
+          # {{ svc.name }}: {{ virtual_ip }}:{{ svc.port }} -> NodePort {{ svc.node_port }}
+          frontend {{ svc.name }}_frontend
+              bind {{ virtual_ip }}:{{ svc.port }}
+              mode {{ svc.mode }}
+              option {{ 'httplog' if svc.mode == 'http' else 'tcplog' }}
+              default_backend {{ svc.name }}_backend
+
+          backend {{ svc.name }}_backend
+              mode {{ svc.mode }}
+              balance roundrobin
+          {% for host in groups['kube_control_plane'] %}
+              server {{ host }} {{ hostvars[host].ansible_host }}:{{ svc.node_port }} check
+          {% endfor %}
+          {% endfor %}
+        # Битый конфиг не попадёт на диск и не положит LB
+        validate: haproxy -c -f %s
+      notify: Restart haproxy
+
+    - name: Configure Keepalived (lb1 — MASTER, lb2 — BACKUP)
+      copy:
+        dest: /etc/keepalived/keepalived.conf
+        content: |
+          vrrp_script check_haproxy {
+              script "killall -0 haproxy"
+              interval 2
+              weight 2
+          }
+
+          vrrp_instance VI_1 {
+              state {{ 'MASTER' if inventory_hostname == 'node-lb1' else 'BACKUP' }}
+              interface {{ nic_name }}
+              virtual_router_id 51
+              priority {{ 101 if inventory_hostname == 'node-lb1' else 100 }}
+              advert_int 1
+              authentication {
+                  auth_type PASS
+                  auth_pass {{ keepalived_auth_pass }}
+              }
+              virtual_ipaddress {
+                  {{ virtual_ip }}
+              }
+              track_script {
+                  check_haproxy
+              }
+          }
+      notify: Restart keepalived
+
+    - name: Enable and start services
+      systemd:
+        name: "{{ item }}"
+        enabled: yes
+        state: started
+      loop:
+        - haproxy
+        - keepalived
+
+  handlers:
+    - name: Restart haproxy
+      systemd:
+        name: haproxy
+        state: restarted
+
+    - name: Restart keepalived
+      systemd:
+        name: keepalived
+        state: restarted
