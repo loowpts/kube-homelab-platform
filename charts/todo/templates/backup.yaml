@@ -1,0 +1,85 @@
+{{- if .Values.backup.enabled }}
+# Ежедневный pg_dump на NFS вне кластера (хост Proxmox, IaC/ansible/playbooks/backup-nfs.yml).
+# Имя файла начинается с namespace — дампы окружений не смешиваются.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: postgres-backup
+  labels:
+    {{- include "todo.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  startingDeadlineSeconds: {{ .Values.backup.startingDeadlineSeconds }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 900
+      template:
+        spec:
+          {{- include "todo.placement" . | nindent 10 }}
+          restartPolicy: Never
+          securityContext:
+            # postgres в образе *-alpine; владелец каталога на NFS — тот же UID
+            runAsNonRoot: true
+            runAsUser: 70
+            runAsGroup: 70
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: pg-dump
+              image: {{ .Values.postgres.image }}
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -euo pipefail
+                  f="/backups/${NAMESPACE}-${POSTGRES_DB}-$(date +%Y%m%d-%H%M%S).dump"
+                  # Недописанный дамп при ошибке не остаётся на шаре
+                  trap 'rm -f "$f.tmp"' EXIT
+                  pg_dump -h postgres -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc -f "$f.tmp"
+                  mv "$f.tmp" "$f"
+                  echo "backup ok: $f ($(du -h "$f" | cut -f1))"
+                  find /backups -name "${NAMESPACE}-${POSTGRES_DB}-*.dump" -mtime +{{ .Values.backup.retentionDays }} -print -delete
+              env:
+                - name: NAMESPACE
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.namespace
+                - name: POSTGRES_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: postgres
+                      key: user
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: postgres
+                      key: password
+                - name: POSTGRES_DB
+                  valueFrom:
+                    secretKeyRef:
+                      name: postgres
+                      key: db
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+          volumes:
+            - name: backups
+              nfs:
+                server: {{ .Values.backup.nfs.server }}
+                path: {{ .Values.backup.nfs.path }}
+{{- end }}

@@ -1,0 +1,23 @@
+# Ежедневный бэкап всех томов Longhorn в backup target (NFS на Proxmox, см. longhorn.yaml).
+# Группа default — все тома без своих recurring-job, т.е. и новые PVC попадают в бэкап сами.
+# Бэкапы инкрементальные (блоки по 2 МБ); хранятся 3 последних.
+# Время — UTC. Стенд выключается на ночь, поэтому бэкап — в часы работы (20:00 МСК):
+# ночью кластера нет, а пропущенный запуск утром совпал бы с подъёмом кластера.
+# Свежесть бэкапов проверяет алерт LonghornVolumeBackupStale (manifests/monitoring/longhorn.yaml).
+apiVersion: longhorn.io/v1beta2
+kind: RecurringJob
+metadata:
+  name: daily-backup
+  namespace: longhorn-system
+  annotations:
+    # CRD ставится чартом Longhorn в той же синхронизации — не падать на dry-run при установке с нуля
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  task: backup
+  cron: "0 17 * * *"
+  groups:
+    - default
+  retain: 3
+  concurrency: 1
+  labels:
+    schedule: daily

@@ -1,0 +1,77 @@
+---
+# NFS-сервер для бэкапов на хосте Proxmox (вне кластера: бэкапы переживают потерю кластера).
+#   /srv/backups/longhorn  — backup target Longhorn (бэкапы всех томов)
+#   /srv/backups/postgres  — дампы pg_dump (CronJob чарта charts/todo, файлы <namespace>-<db>-<дата>.dump)
+# Доступ — только с нод кластера.
+#
+# Запуск вручную (нужен root по SSH-ключу на Proxmox):
+#   ansible-playbook playbooks/backup-nfs.yml
+- name: NFS для бэкапов на Proxmox
+  hosts: proxmox
+  become: true
+  vars:
+    backup_root: /srv/backups
+    # UID/GID postgres в образе postgres:*-alpine — CronJob пишет дампы от этого пользователя
+    postgres_uid: 70
+
+  tasks:
+    - name: Install NFS server
+      ansible.builtin.apt:
+        name: nfs-kernel-server
+        state: present
+        update_cache: yes
+
+    - name: Backup root directory
+      ansible.builtin.file:
+        path: "{{ backup_root }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Longhorn backup directory
+      ansible.builtin.file:
+        path: "{{ backup_root }}/longhorn"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Postgres dumps directory
+      ansible.builtin.file:
+        path: "{{ backup_root }}/postgres"
+        state: directory
+        owner: "{{ postgres_uid }}"
+        group: "{{ postgres_uid }}"
+        mode: "0750"
+
+    # exportfs читает /etc/exports.d/*.exports, но пакет каталог не создаёт
+    - name: Exports drop-in directory
+      ansible.builtin.file:
+        path: /etc/exports.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    # no_root_squash: Longhorn пишет бэкапы от root
+    - name: Export backups to cluster nodes only
+      ansible.builtin.copy:
+        dest: /etc/exports.d/homelab-backups.exports
+        content: |
+          # Управляется Ansible (IaC/ansible/playbooks/backup-nfs.yml)
+          {% for host in groups['k8s_cluster'] %}
+          {{ backup_root }} {{ hostvars[host].ansible_host }}(rw,sync,no_subtree_check,no_root_squash)
+          {% endfor %}
+        mode: "0644"
+      notify: Reload exports
+
+    - name: Enable and start NFS server
+      ansible.builtin.systemd:
+        name: nfs-server
+        enabled: yes
+        state: started
+
+  handlers:
+    - name: Reload exports
+      ansible.builtin.command: exportfs -ra
