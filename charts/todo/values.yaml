@@ -1,0 +1,104 @@
+# Общие значения для всех окружений. Отличия — в values-<env>.yaml.
+
+image:
+  repository: 192.168.0.21:5050/loowpts/homelab/backend
+  # Задаётся в values-<env>.yaml; обновляет CI (app_deploy_dev / app_deploy_prod)
+  tag: ""
+  pullSecret: gitlab-registry-secret
+
+vault:
+  # Префикс секретов окружения в Vault: <path>/postgres, <path>/redis
+  path: ""
+  # Общий для всех окружений доступ к registry
+  registryKey: secret/gitlab-registry
+  secretStore: vault-backend
+  refreshInterval: 1h
+
+# Где запускаются поды приложения (backend, postgres, redis, бэкап).
+# Приложение — только на воркерах: infra отдана платформе и закрыта taint'ом.
+# Метки нод ставит IaC/ansible (роль 01-node-roles).
+placement:
+  nodeSelector:
+    node-role.kubernetes.io/worker: ""
+  tolerations: []
+
+backend:
+  replicas: 1
+  # Пауза перед SIGTERM: под успевает выйти из эндпоинтов (Service, kube-proxy)
+  preStopSeconds: 15
+  # Если задан — отдельный Service backend-nodeport (только http) для публикации
+  # на VIP через HAProxy (lb_services в IaC/ansible/playbooks/loadbalancer.yml).
+  # Метрики наружу не публикуются: они на внутреннем Service backend.
+  nodePort: null
+  config:
+    CACHE_TTL_SECONDS: "10"
+    RATE_LIMIT_RPM: "120"
+    SHUTDOWN_TIMEOUT_SECONDS: "15"
+  resources:
+    requests:
+      cpu: 100m
+      memory: 64Mi
+    limits:
+      cpu: 300m
+      memory: 128Mi
+  hpa:
+    enabled: false
+    minReplicas: 3
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 50
+
+postgres:
+  image: postgres:16-alpine
+  storage: 1Gi
+  storageClass: longhorn
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+redis:
+  image: redis:7-alpine
+  # Кэш и счётчики rate limit, все ключи с TTL. Лимит памяти Redis — ниже лимита контейнера
+  # (128Mi): при заполнении вытесняются старые ключи (allkeys-lru), а не OOMKill.
+  # Снапшоты (RDB) выключены — тома нет, данные кэша не нужно сохранять.
+  maxmemory: 100mb
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+monitoring:
+  # ServiceMonitor и PrometheusRule подхватываются Prometheus по этому лейблу
+  releaseLabel: monitoring
+  serviceMonitor: true
+  alerts: false
+
+backup:
+  enabled: false
+  # UTC. Стенд выключается на ночь — расписание в часы, когда он работает (20:30 МСК),
+  # после бэкапа томов Longhorn (17:00 UTC, IaC/argocd/manifests/longhorn/recurring-jobs.yaml).
+  schedule: "30 17 * * *"
+  # Пропущенный запуск (стенд был выключен) не стартует позже чем через час после расписания:
+  # иначе «догоняющий» бэкап запустится утром, пока кластер ещё поднимается.
+  startingDeadlineSeconds: 3600
+  retentionDays: 14
+  nfs:
+    server: 192.168.0.143
+    path: /srv/backups/postgres
+
+# Публикация через ingress-nginx: HAProxy <VIP>:80/443 -> ingress -> Service backend.
+ingress:
+  enabled: false
+  className: nginx
+  host: ""
+  # ClusterIssuer cert-manager для TLS (IaC/argocd/manifests/cert-manager); пусто — только http
+  clusterIssuer: homelab-ca
+  # Ещё одно правило без host — отвечать на запросы по IP (http://<VIP>).
+  # Только в одном окружении: два таких правила в кластере конфликтуют.
+  defaultRule: false

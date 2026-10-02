@@ -1,0 +1,222 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend
+  labels:
+    {{- include "todo.labels" . | nindent 4 }}
+data:
+  REDIS_ADDR: "redis:6379"
+  REDIS_DB: "0"
+  {{- range $k, $v := .Values.backend.config }}
+  {{ $k }}: {{ $v | quote }}
+  {{- end }}
+---
+# Backend: миграции в initContainer, без root, preStop, распределение по нодам.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  labels:
+    {{- include "todo.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+spec:
+  {{- if not .Values.backend.hpa.enabled }}
+  replicas: {{ .Values.backend.replicas }}
+  {{- end }}
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: {{ if or .Values.backend.hpa.enabled (gt (int .Values.backend.replicas) 1) }}1{{ else }}0{{ end }}
+  selector:
+    matchLabels:
+      {{- include "todo.selector" (dict "ctx" . "component" "backend") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "todo.labels" . | nindent 8 }}
+        app.kubernetes.io/component: backend
+      annotations:
+        # Перезапуск подов при изменении конфига
+        checksum/config: {{ toJson .Values.backend.config | sha256sum }}
+    spec:
+      imagePullSecrets:
+        - name: {{ .Values.image.pullSecret }}
+      # preStop + graceful shutdown приложения (SHUTDOWN_TIMEOUT_SECONDS) + запас 10 с
+      terminationGracePeriodSeconds: {{ add .Values.backend.preStopSeconds (int .Values.backend.config.SHUTDOWN_TIMEOUT_SECONDS) 10 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      {{- include "todo.placement" . | nindent 6 }}
+      # Реплики поровну по воркерам: отказ одной ноды не уносит весь backend.
+      # nodeTaintsPolicy: Honor — упавшая нода (taint unreachable) не считается,
+      # и замена встаёт на живую; matchLabelKeys — считаются только поды той же ревизии,
+      # иначе старые поды во время rolling update мешали бы новым.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          nodeTaintsPolicy: Honor
+          matchLabelKeys:
+            - pod-template-hash
+          labelSelector:
+            matchLabels:
+              {{- include "todo.selector" (dict "ctx" . "component" "backend") | nindent 14 }}
+      initContainers:
+        # Миграции идемпотентны (schema_migrations + advisory lock) — параллельные поды безопасны
+        - name: migrate
+          image: {{ include "todo.image" . }}
+          args: ["-migrate-only"]
+          env:
+            - name: POSTGRES_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: postgres
+                  key: dsn
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+      containers:
+        - name: backend
+          image: {{ include "todo.image" . }}
+          ports:
+            - containerPort: 8080
+              name: http
+            - containerPort: 9090
+              name: metrics
+          envFrom:
+            - configMapRef:
+                name: backend
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis
+                  key: password
+            - name: POSTGRES_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: postgres
+                  key: dsn
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml .Values.backend.resources | nindent 12 }}
+          lifecycle:
+            # Под успевает выйти из эндпоинтов до SIGTERM
+            preStop:
+              sleep:
+                seconds: {{ .Values.backend.preStopSeconds }}
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 15
+            failureThreshold: 4
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  labels:
+    {{- include "todo.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+spec:
+  selector:
+    {{- include "todo.selector" (dict "ctx" . "component" "backend") | nindent 4 }}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+    - name: metrics
+      port: 9090
+      targetPort: metrics
+{{- if .Values.backend.nodePort }}
+---
+# Публикация окружения: только http, без метрик
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-nodeport
+  labels:
+    {{- include "todo.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend-nodeport
+spec:
+  type: NodePort
+  selector:
+    {{- include "todo.selector" (dict "ctx" . "component" "backend") | nindent 4 }}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      nodePort: {{ .Values.backend.nodePort }}
+{{- end }}
+{{- if .Values.backend.hpa.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: backend
+  labels:
+    {{- include "todo.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: backend
+  minReplicas: {{ .Values.backend.hpa.minReplicas }}
+  maxReplicas: {{ .Values.backend.hpa.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.backend.hpa.targetCPUUtilizationPercentage }}
+{{- end }}
+{{- if or .Values.backend.hpa.enabled (gt (int .Values.backend.replicas) 1) }}
+---
+# Добровольные нарушения (drain ноды, обновление кластера) выселяют не больше одной
+# реплики за раз. С одной репликой (dev) PDB не создаётся — он заблокировал бы drain.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: backend
+  labels:
+    {{- include "todo.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      {{- include "todo.selector" (dict "ctx" . "component" "backend") | nindent 6 }}
+{{- end }}

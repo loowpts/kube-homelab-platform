@@ -1,0 +1,26 @@
+# prod: обновляется по git-тегу vX.Y.Z после ручного подтверждения (app_deploy_prod).
+image:
+  tag: v1.3.0
+
+vault:
+  path: secret/prod
+
+backend:
+  # NodePort на HAProxy не публикуется (<VIP>:80 — ingress); нужен для отладки в обход ingress
+  nodePort: 30800
+  hpa:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 5
+
+ingress:
+  enabled: true
+  host: todo.192.168.0.15.nip.io
+  # http://192.168.0.15 без имени открывает prod
+  defaultRule: true
+
+monitoring:
+  alerts: true
+
+backup:
+  enabled: true

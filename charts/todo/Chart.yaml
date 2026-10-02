@@ -1,0 +1,5 @@
+apiVersion: v2
+name: todo
+description: todo-app (Go backend) с Postgres и Redis; секреты из Vault через External Secrets
+type: application
+version: 0.1.0

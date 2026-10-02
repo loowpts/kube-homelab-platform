@@ -1,0 +1,21 @@
+# dev: обновляется автоматически при каждом merge в main (app_deploy_dev).
+image:
+  tag: 06cba2ef
+
+vault:
+  path: secret/dev
+
+backend:
+  replicas: 1
+  # http://192.168.0.15:8081 (HAProxy -> NodePort) — прямой доступ в обход ingress
+  nodePort: 30801
+
+ingress:
+  enabled: true
+  host: todo-dev.192.168.0.15.nip.io
+
+monitoring:
+  alerts: false
+
+backup:
+  enabled: false

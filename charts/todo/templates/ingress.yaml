@@ -1,0 +1,31 @@
+{{- if .Values.ingress.enabled }}
+{{- $host := required "ingress.host обязателен при ingress.enabled" .Values.ingress.host }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: backend
+  labels:
+    {{- include "todo.labels" . | nindent 4 }}
+  {{- with .Values.ingress.clusterIssuer }}
+  annotations:
+    cert-manager.io/cluster-issuer: {{ . }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.ingress.clusterIssuer }}
+  tls:
+    - hosts:
+        - {{ $host }}
+      secretName: backend-tls
+  {{- end }}
+  rules:
+    - host: {{ $host }}
+      http:
+        {{- include "todo.ingressPaths" . | nindent 8 }}
+    {{- if .Values.ingress.defaultRule }}
+    # Без host: запросы по IP и с любым другим именем
+    - http:
+        {{- include "todo.ingressPaths" . | nindent 8 }}
+    {{- end }}
+{{- end }}
+
