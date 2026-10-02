@@ -1,0 +1,39 @@
+{{define "form.html"}}
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>{{if .IsNew}}Новая задача{{else}}Изменить задачу{{end}}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main>
+    <h1>{{if .IsNew}}Новая задача{{else}}Изменить задачу{{end}}</h1>
+
+    <form method="post" action="{{if .IsNew}}/tasks{{else}}/tasks/{{.Task.ID}}{{end}}">
+      <label>
+        Название
+        <input type="text" name="title" value="{{.Task.Title}}" required>
+      </label>
+
+      <label>
+        Описание
+        <textarea name="description">{{.Task.Description}}</textarea>
+      </label>
+
+      {{if not .IsNew}}
+      <label class="checkbox">
+        <input type="checkbox" name="done" {{if .Task.Done}}checked{{end}}>
+        Готово
+      </label>
+      {{end}}
+
+      <div class="form-actions">
+        <button type="submit">Сохранить</button>
+        <a href="/">Отмена</a>
+      </div>
+    </form>
+  </main>
+</body>
+</html>
+{{end}}

@@ -1,0 +1,48 @@
+body {
+  font-family: system-ui, sans-serif;
+  max-width: 720px;
+  margin: 2rem auto;
+  padding: 0 1rem;
+  color: #1a1a1a;
+}
+
+h1 { margin-bottom: 1rem; }
+
+table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+th, td { text-align: left; padding: 0.5rem; border-bottom: 1px solid #ddd; }
+
+.button, button {
+  display: inline-block;
+  padding: 0.4rem 0.8rem;
+  background: #2563eb;
+  color: #fff;
+  text-decoration: none;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.actions { display: flex; gap: 0.5rem; align-items: center; }
+.actions form { display: inline; }
+.actions button { background: #dc2626; }
+
+.error { color: #dc2626; }
+
+form label {
+  display: block;
+  margin-bottom: 1rem;
+}
+
+form input[type="text"], form textarea {
+  display: block;
+  width: 100%;
+  margin-top: 0.25rem;
+  padding: 0.4rem;
+  box-sizing: border-box;
+}
+
+.checkbox { display: flex; align-items: center; gap: 0.5rem; }
+.checkbox input { width: auto; }
+
+.form-actions { display: flex; gap: 1rem; align-items: center; }

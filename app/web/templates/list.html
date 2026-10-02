@@ -1,0 +1,42 @@
+{{define "list.html"}}
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Todo App</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main>
+    <h1>Задачи</h1>
+
+    {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+
+    <a class="button" href="/tasks/new">+ Новая задача</a>
+
+    <table>
+      <thead>
+        <tr><th>Название</th><th>Описание</th><th>Готово</th><th></th></tr>
+      </thead>
+      <tbody>
+        {{range .Tasks}}
+        <tr>
+          <td>{{.Title}}</td>
+          <td>{{.Description}}</td>
+          <td>{{if .Done}}✅{{else}}—{{end}}</td>
+          <td class="actions">
+            <a href="/tasks/{{.ID}}/edit">Изменить</a>
+            <form action="/tasks/{{.ID}}/delete" method="post" onsubmit="return confirm('Удалить задачу?');">
+              <button type="submit">Удалить</button>
+            </form>
+          </td>
+        </tr>
+        {{else}}
+        <tr><td colspan="4">Задач пока нет</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </main>
+</body>
+</html>
+{{end}}
