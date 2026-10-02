@@ -1,0 +1,57 @@
+# Метрики и алерты Longhorn. Лежат в приложении monitoring (волна -1), а не в чарте Longhorn
+# (волна -3): при подъёме с нуля CRD ServiceMonitor на волне -3 ещё нет, и Longhorn не стал бы Healthy.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: longhorn
+  namespace: monitoring
+  labels:
+    release: monitoring          # serviceMonitorSelector Prometheus
+spec:
+  namespaceSelector:
+    matchNames: [longhorn-system]
+  selector:
+    matchLabels:
+      app: longhorn-manager      # Service longhorn-backend → все longhorn-manager (по одному на ноду)
+  endpoints:
+    - port: manager
+      path: /metrics
+      interval: 60s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: longhorn
+  namespace: monitoring
+  labels:
+    release: monitoring          # ruleSelector Prometheus
+spec:
+  groups:
+    - name: longhorn
+      rules:
+        # 0 — бэкапа нет вообще; расписание — 17:00 UTC (manifests/longhorn/recurring-jobs.yaml)
+        - alert: LonghornVolumeBackupStale
+          expr: time() - longhorn_volume_last_backup_at > 26 * 3600
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "Нет свежего бэкапа тома {{ $labels.pvc_namespace }}/{{ $labels.pvc }}"
+            description: "Последний успешный бэкап Longhorn старше 26 часов (или его нет). kubectl -n longhorn-system get backups.longhorn.io"
+        # 1 healthy, 2 degraded (не хватает реплик), 3 faulted (данные недоступны)
+        - alert: LonghornVolumeDegraded
+          expr: longhorn_volume_robustness == 2
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Том {{ $labels.pvc_namespace }}/{{ $labels.pvc }} работает без полного числа реплик"
+            description: "Longhorn перестраивает реплику или для неё нет подходящей ноды."
+        - alert: LonghornVolumeFaulted
+          expr: longhorn_volume_robustness == 3
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Том {{ $labels.pvc_namespace }}/{{ $labels.pvc }} недоступен (faulted)"
+            description: "Все реплики потеряны — восстановление из бэкапа."

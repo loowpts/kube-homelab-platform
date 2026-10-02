@@ -1,0 +1,142 @@
+# kube-prometheus-stack (Prometheus, Grafana, Alertmanager) + пароль Grafana из Vault.
+# Ingress: grafana/prometheus/alertmanager.192.168.0.15.nip.io (http и https).
+# NodePort'ы зафиксированы — прямой доступ <VIP>:3000/:9090 через HAProxy (lb_services в group_vars/lb.yml).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: monitoring
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  project: default
+  sources:
+    - repoURL: https://prometheus-community.github.io/helm-charts
+      chart: kube-prometheus-stack
+      targetRevision: 91.7.1
+      helm:
+        releaseName: monitoring
+        valuesObject:
+          # Всё, кроме node-exporter (DaemonSet на всех нодах), — на infra
+          # requests — по фактическому потреблению (kubectl top) с запасом: без них поды
+          # платформы в QoS BestEffort — планировщик считает их «невесомыми», и при нехватке
+          # памяти на infra kubelet выселяет их первыми. Limits не задаём (Burstable).
+          prometheusOperator:
+            resources:
+              requests: {cpu: 10m, memory: 64Mi}
+            # Размещение на infra; ниже в файле — ссылки *infraNodeSelector / *infraTolerations
+            nodeSelector: &infraNodeSelector
+              node-role.kubernetes.io/infra: ""
+            tolerations: &infraTolerations
+              - key: node-role.kubernetes.io/infra
+                operator: Exists
+                effect: NoSchedule
+            admissionWebhooks:
+              patch:
+                nodeSelector: *infraNodeSelector
+                tolerations: *infraTolerations
+          kube-state-metrics:
+            resources:
+              requests: {cpu: 10m, memory: 64Mi}
+            nodeSelector: *infraNodeSelector
+            tolerations: *infraTolerations
+
+          alertmanager:
+            ingress:
+              enabled: true
+              ingressClassName: nginx
+              annotations:
+                cert-manager.io/cluster-issuer: homelab-ca
+              hosts:
+                - &alertmanagerHost alertmanager.192.168.0.15.nip.io
+              tls:
+                - secretName: alertmanager-tls
+                  hosts:
+                    - *alertmanagerHost
+            alertmanagerSpec:
+              resources:
+                requests: {cpu: 10m, memory: 64Mi}
+              nodeSelector: *infraNodeSelector
+              tolerations: *infraTolerations
+
+          grafana:
+            resources:
+              requests: {cpu: 100m, memory: 384Mi}
+            nodeSelector: *infraNodeSelector
+            tolerations: *infraTolerations
+            persistence:
+              enabled: true
+              size: 10Gi
+              storageClassName: longhorn
+            admin:
+              existingSecret: grafana-admin
+              userKey: admin-user
+              passwordKey: admin-password
+            service:
+              type: NodePort
+              nodePort: 31133
+            ingress:
+              enabled: true
+              ingressClassName: nginx
+              annotations:
+                cert-manager.io/cluster-issuer: homelab-ca
+              hosts:
+                - &grafanaHost grafana.192.168.0.15.nip.io
+              tls:
+                - secretName: grafana-tls
+                  hosts:
+                    - *grafanaHost
+
+          prometheus:
+            service:
+              type: NodePort
+              nodePort: 30230
+              reloaderWebNodePort: 30281
+            ingress:
+              enabled: true
+              ingressClassName: nginx
+              annotations:
+                cert-manager.io/cluster-issuer: homelab-ca
+              hosts:
+                - &prometheusHost prometheus.192.168.0.15.nip.io
+              tls:
+                - secretName: prometheus-tls
+                  hosts:
+                    - *prometheusHost
+            prometheusSpec:
+              resources:
+                requests: {cpu: 200m, memory: 1Gi}
+              nodeSelector: *infraNodeSelector
+              tolerations: *infraTolerations
+              storageSpec:
+                volumeClaimTemplate:
+                  spec:
+                    resources:
+                      requests:
+                        storage: 20Gi
+                    storageClassName: longhorn
+
+    - repoURL: http://192.168.0.21/loowpts/homelab.git
+      targetRevision: main
+      path: IaC/argocd/manifests/monitoring
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      # CRD prometheus-operator слишком большие для client-side apply (лимит аннотации)
+      - ServerSideApply=true
+      - RespectIgnoreDifferences=true
+  ignoreDifferences:
+    # caBundle вебхуков проставляет job kube-webhook-certgen — без этого вечный OutOfSync
+    - group: admissionregistration.k8s.io
+      kind: MutatingWebhookConfiguration
+      jqPathExpressions:
+        - .webhooks[]?.clientConfig.caBundle
+    - group: admissionregistration.k8s.io
+      kind: ValidatingWebhookConfiguration
+      jqPathExpressions:
+        - .webhooks[]?.clientConfig.caBundle
