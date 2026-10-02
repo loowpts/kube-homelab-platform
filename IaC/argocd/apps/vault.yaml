@@ -1,0 +1,109 @@
+# Vault: standalone, данные в файловом хранилище на PVC Longhorn — переживают рестарт пода и ноды.
+# После рестарта Vault запечатан (sealed); сайдкар auto-unseal снимает seal ключом
+# из Secret vault-unseal-key, который создаёт IaC/vault/bootstrap.sh при первой инициализации.
+#
+# Компромисс для homelab: unseal-ключ лежит в Secret кластера, поэтому любой, кто может
+# читать Secret'ы в namespace vault, может распечатать Vault. Root token в кластере не хранится.
+#
+# Чарт берётся из GitHub: helm.releases.hashicorp.com отвечает 403 из кластера.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: vault
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hashicorp/vault-helm.git
+    targetRevision: v0.34.1
+    path: .
+    helm:
+      releaseName: vault
+      valuesObject:
+        # Agent injector не нужен: секреты в поды доставляет External Secrets.
+        # К тому же его обязательный podAntiAffinity (один под на ноду) на единственной
+        # infra-ноде не даёт пройти rolling update — новый под висит в Pending.
+        injector:
+          enabled: false
+        # Платформа — на infra
+        server:
+          resources:
+            requests: {cpu: 50m, memory: 256Mi}
+          nodeSelector:
+            node-role.kubernetes.io/infra: ""
+          tolerations:
+            - key: node-role.kubernetes.io/infra
+              operator: Exists
+              effect: NoSchedule
+          dev:
+            enabled: false
+          standalone:
+            enabled: true
+
+          dataStorage:
+            enabled: true
+            size: 2Gi
+            storageClass: longhorn
+
+          # UI и API: https://vault.192.168.0.15.nip.io (ingress) и <VIP>:8200 (HAProxy -> NodePort)
+          service:
+            type: NodePort
+            nodePort: 30366
+
+          ingress:
+            enabled: true
+            ingressClassName: nginx
+            annotations:
+              cert-manager.io/cluster-issuer: homelab-ca
+            hosts:
+              - host: vault.192.168.0.15.nip.io
+            tls:
+              - secretName: vault-tls
+                hosts:
+                  - vault.192.168.0.15.nip.io
+
+          volumes:
+            - name: unseal-key
+              secret:
+                secretName: vault-unseal-key
+                # До первой инициализации Secret'а ещё нет — под всё равно должен стартовать
+                optional: true
+
+          extraContainers:
+            - name: auto-unseal
+              image: hashicorp/vault:2.0.4
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  while true; do
+                    vault status >/dev/null 2>&1
+                    # exit code 2 = sealed; ключ появляется после bootstrap.sh
+                    if [ "$?" -eq 2 ] && [ -s /unseal/key ]; then
+                      vault operator unseal "$(cat /unseal/key)" >/dev/null && echo "vault unsealed"
+                    fi
+                    sleep 10
+                  done
+              env:
+                - name: VAULT_ADDR
+                  value: http://127.0.0.1:8200
+              volumeMounts:
+                - name: unseal-key
+                  mountPath: /unseal
+                  readOnly: true
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 16Mi
+                limits:
+                  memory: 64Mi
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: vault
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
