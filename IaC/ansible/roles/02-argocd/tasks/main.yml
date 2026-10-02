@@ -1,0 +1,93 @@
+---
+- name: Create argocd namespace
+  kubernetes.core.k8s:
+    name: argocd
+    api_version: v1
+    kind: Namespace
+    state: present
+
+- name: Add ArgoCD Helm repository
+  kubernetes.core.helm_repository:
+    name: argo
+    repo_url: "https://argoproj.github.io/argo-helm"
+
+- name: Deploy ArgoCD via Helm
+  kubernetes.core.helm:
+    name: argocd
+    chart_ref: argo/argo-cd
+    # Версия, которая стоит в кластере: без пина прогон обновил бы ArgoCD до latest
+    chart_version: "10.9.2"
+    release_namespace: argocd
+    create_namespace: false
+    wait: true
+    values:
+      global:
+        # Платформа — на infra (метка и taint ставит роль 01-node-roles)
+        nodeSelector:
+          node-role.kubernetes.io/infra: ""
+        tolerations:
+          - key: node-role.kubernetes.io/infra
+            operator: Exists
+            effect: NoSchedule
+        # Внешний адрес (ingress, nip.io резолвит в VIP) — используется в ссылках UI,
+        # SSO и уведомлениях. Дополнительно доступен <VIP>:8443 (HAProxy -> NodePort).
+        domain: "argocd.{{ ingress_domain }}"
+      configs:
+        cm:
+          # Здоровье Application = здоровье его ресурсов. Без этого root (app of apps)
+          # не ждёт готовности предыдущей sync-wave (Longhorn -> ESO/cert-manager ->
+          # Vault/мониторинг -> приложение) при подъёме кластера с нуля.
+          resource.customizations.health.argoproj.io_Application: |
+            hs = {}
+            hs.status = "Progressing"
+            hs.message = ""
+            if obj.status ~= nil and obj.status.health ~= nil then
+              hs.status = obj.status.health.status
+              if obj.status.health.message ~= nil then
+                hs.message = obj.status.health.message
+              end
+            end
+            return hs
+      # requests по фактическому потреблению: без них поды в QoS BestEffort
+      controller:
+        resources:
+          requests: {cpu: 100m, memory: 512Mi}
+      repoServer:
+        resources:
+          requests: {cpu: 50m, memory: 192Mi}
+      applicationSet:
+        resources:
+          requests: {cpu: 10m, memory: 64Mi}
+      # Не используются (вход через admin, SSO и уведомлений нет) — экономия памяти на хосте
+      dex:
+        enabled: false
+      notifications:
+        enabled: false
+      server:
+        resources:
+          requests: {cpu: 50m, memory: 128Mi}
+        service:
+          type: NodePort
+          # Фиксированные порты: на них смотрит HAProxy
+          nodePortHttp: 30080
+          nodePortHttps: 30443
+        ingress:
+          enabled: true
+          ingressClassName: nginx
+          annotations:
+            # argocd-server сам отдаёт только https
+            nginx.ingress.kubernetes.io/backend-protocol: HTTPS
+            cert-manager.io/cluster-issuer: homelab-ca
+          # Свой Secret, а не tls: true — тот пишет в argocd-server-tls,
+          # который argocd-server использует для собственного TLS
+          extraTls:
+            - hosts:
+                - "argocd.{{ ingress_domain }}"
+              secretName: argocd-ingress-tls
+      redis:
+        resources:
+          requests: {cpu: 10m, memory: 32Mi}
+        image:
+          repository: redis
+          tag: 7.2-alpine
+          imagePullPolicy: IfNotPresent

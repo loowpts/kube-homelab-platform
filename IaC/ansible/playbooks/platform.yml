@@ -1,0 +1,34 @@
+---
+# Подготовка нод (системные зависимости для хранилища)
+- hosts: kube_control_plane:kube_node:infra
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Ensure open-iscsi and nfs-common are installed
+      ansible.builtin.apt:
+        name:
+          - open-iscsi
+          # NFS-клиент: бэкапы Longhorn и CronJob pg_dump пишут на NFS (backup-nfs.yml)
+          - nfs-common
+        state: present
+        update_cache: yes
+
+    - name: Ensure iscsid service is started and enabled
+      ansible.builtin.systemd:
+        name: iscsid
+        state: started
+        enabled: yes
+
+- hosts: node-master1
+  become: true
+  gather_facts: false
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+    kubeconfig: /etc/kubernetes/admin.conf
+  roles:
+    - role: 00-tools
+    # Метки и taint нод — до ArgoCD: его поды и всё, что он развернёт, выбирают ноду по роли
+    - role: 01-node-roles
+    - role: 02-argocd

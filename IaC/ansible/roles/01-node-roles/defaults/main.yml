@@ -1,0 +1,7 @@
+---
+# Роли нод: метка node-role.kubernetes.io/<роль> (видна в kubectl get nodes, колонка ROLES).
+#   infra   — платформа: ingress, мониторинг, Vault, ArgoCD, cert-manager, ESO.
+#             Закрыта taint'ом — без явной toleration туда ничего не попадёт.
+#   worker  — приложения (charts/todo: placement.nodeSelector).
+# Состав — группы infra и workers в inventory/hosts.ini.
+infra_taint_key: node-role.kubernetes.io/infra

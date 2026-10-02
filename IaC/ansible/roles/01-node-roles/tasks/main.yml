@@ -1,0 +1,61 @@
+---
+- name: Label worker nodes
+  kubernetes.core.k8s:
+    kind: Node
+    name: "{{ item }}"
+    state: patched
+    definition:
+      metadata:
+        labels:
+          node-role.kubernetes.io/worker: ""
+  loop: "{{ groups['workers'] }}"
+
+- name: Label infra nodes
+  kubernetes.core.k8s:
+    kind: Node
+    name: "{{ item }}"
+    state: patched
+    definition:
+      metadata:
+        labels:
+          node-role.kubernetes.io/infra: ""
+  loop: "{{ groups['infra'] }}"
+
+# Taint можно ставить, только когда Longhorn уже переносит его: instance-manager на infra
+# обслуживает тома Prometheus и Grafana, и без toleration после рестарта он не встанет.
+# Longhorn применяет новую toleration только при отключённых томах (IaC/README.md → Размещение).
+- name: Read Longhorn taint toleration setting
+  kubernetes.core.k8s_info:
+    api_version: longhorn.io/v1beta2
+    kind: Setting
+    namespace: longhorn-system
+    name: taint-toleration
+  register: longhorn_toleration
+  # Только чтение — выполняем и в --check
+  check_mode: false
+
+- name: Decide whether infra can be tainted
+  ansible.builtin.set_fact:
+    # Longhorn ещё не установлен (подъём с нуля) — он сразу встанет с toleration из values
+    infra_taint_safe: >-
+      {{ longhorn_toleration.resources | length == 0
+         or (infra_taint_key in longhorn_toleration.resources[0].value
+             and longhorn_toleration.resources[0].status.applied | default(false)) }}
+
+- name: Taint infra nodes
+  kubernetes.core.k8s_taint:
+    name: "{{ item }}"
+    state: present
+    taints:
+      - key: "{{ infra_taint_key }}"
+        effect: NoSchedule
+  loop: "{{ groups['infra'] }}"
+  when: infra_taint_safe | bool
+
+- name: Infra taint postponed
+  ansible.builtin.debug:
+    msg: >-
+      Taint {{ infra_taint_key }} не поставлен: Longhorn ещё не применил toleration
+      (setting taint-toleration, status.applied). Нужно окно с отключёнными томами —
+      IaC/README.md → Размещение. Метки поставлены.
+  when: not infra_taint_safe | bool

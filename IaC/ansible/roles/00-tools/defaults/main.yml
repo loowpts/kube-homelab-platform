@@ -1,0 +1,5 @@
+---
+# Helm на node-master1 — нужен модулям kubernetes.core.helm (роль 02-argocd).
+# Обновление: новая версия + sha256 из https://get.helm.sh/helm-<версия>-linux-amd64.tar.gz.sha256sum
+helm_version: v3.22.0
+helm_sha256: 1e4ab49e429626cf6c6958d914248b78c9730803c2751b87627e171dc800e7bb
