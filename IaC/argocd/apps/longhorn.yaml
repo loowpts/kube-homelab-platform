@@ -1,0 +1,56 @@
+# Longhorn — StorageClass longhorn для всех PVC кластера (Vault, Postgres, Prometheus, Grafana).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: longhorn
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+spec:
+  project: default
+  sources:
+    - repoURL: https://charts.longhorn.io
+      chart: longhorn
+      targetRevision: 1.12.1
+      helm:
+        releaseName: longhorn
+        valuesObject:
+          persistence:
+            defaultClassReplicaCount: 2
+          # Longhorn нужен на всех нодах с томами, в том числе на infra (Prometheus, Grafana).
+          # global — manager, UI, driver deployer; taintToleration — то, что Longhorn создаёт
+          # сам (instance-manager, CSI, engine-image). Смена taintToleration применяется только
+          # при отключённых томах — порядок в IaC/README.md → Размещение.
+          global:
+            tolerations:
+              - key: node-role.kubernetes.io/infra
+                operator: Exists
+                effect: NoSchedule
+          defaultSettings:
+            taintToleration: "node-role.kubernetes.io/infra:NoSchedule"
+          longhornUI:
+            # UI — платформа, на infra
+            nodeSelector:
+              node-role.kubernetes.io/infra: ""
+          # Рекомендация Longhorn для ArgoCD: pre-upgrade hook-job не нужен
+          preUpgradeChecker:
+            jobEnabled: false
+          # Бэкапы томов — вне кластера, NFS на хосте Proxmox (playbooks/backup-nfs.yml)
+          defaultBackupStore:
+            backupTarget: nfs://192.168.0.143:/srv/backups/longhorn
+
+    # Расписание бэкапов (RecurringJob)
+    - repoURL: http://192.168.0.21/loowpts/homelab.git
+      targetRevision: main
+      path: IaC/argocd/manifests/longhorn
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: longhorn-system
+  syncPolicy:
+    automated:
+      # Хранилище с данными: ArgoCD ничего в нём не удаляет сам (prune только вручную)
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

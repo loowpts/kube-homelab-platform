@@ -1,0 +1,22 @@
+# App of apps: ArgoCD применяет все Application из IaC/argocd/apps.
+# Применяется один раз вручную (kubectl apply -f IaC/argocd/root.yaml),
+# дальше новые компоненты платформы добавляются файлами в apps/.
+# Требует доступ ArgoCD к репозиторию — см. IaC/README.md, раздел ArgoCD.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: http://192.168.0.21/loowpts/homelab.git
+    targetRevision: main
+    path: IaC/argocd/apps
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
