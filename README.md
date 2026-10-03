@@ -189,7 +189,7 @@ ingress, Vault, бэкапы; [app/README.md](app/README.md) — приложе�
 ## Быстрый старт
 
 ```bash
-git clone --recurse-submodules <repo>
+git clone --recurse-submodules https://github.com/loowpts/kube-homelab-platform.git
 ```
 
 1. Заполнить CI/CD Variables — список в [IaC/README.md](IaC/README.md#cicd-variables-проекта-homelab).
